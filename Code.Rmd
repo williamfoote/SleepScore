@@ -1,0 +1,187 @@
+---
+title: "Analyzing Sleep Through Smart Technology: A Case Study of Will Foote’s Fitbit Data"
+subtitle: "[CODE FILE]"
+author: "William Foote & Kyle Fang"
+date: "6/12/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Loading sleep data
+
+```{r}
+library(readxl)
+library(chron)
+sleep <- read_excel("combined_data_final.xlsx")
+class(sleep$Date)
+```
+
+# Clean start and end times for sleep
+
+## Need get_miltime function
+
+```{r}
+get_miltime <- function (x) {
+  if (grepl("-", x)) {
+    x <- gsub("-", "", x)
+    x <- unlist(strsplit(x, " "))
+    if(length(x) > 2) {
+      x <- paste(x[2:3], collapse = "")
+    } else {
+      x <- x[2]
+    }
+    if (grepl("AM", x)) {
+      temp <- unlist(strsplit(x, ""))
+      temp <- paste(temp[1:2], collapse = "")
+      if (temp != 12) {
+         x <- gsub("AM", "", x)
+         x <- paste(x, ":", "00", sep = "")
+      } else {
+        x <- gsub("AM", "", x)
+        split_minhr <- unlist(strsplit(x, ":"))
+        hours <- as.numeric(split_minhr[1])
+        mins <- split_minhr[2]
+        mil_hr <- hours - 12
+        x <- paste(mil_hr, ":", mins, ":", "00", sep = "")
+      }
+    }
+    if (grepl("PM", x)) {
+      x <- gsub("PM", "", x)
+      temp <- unlist(strsplit(x, ""))
+      temp <- paste(temp[1:2], collapse = "")
+      if (temp != "12") {
+        split_minhr <- unlist(strsplit(x, ":"))
+        hours <- as.numeric(split_minhr[1])
+        mins <- split_minhr[2]
+        mil_hr <- hours + 12
+        x <- paste(mil_hr, ":", mins, ":", "00", sep = "")
+      } else {
+        x <- paste(x, ":", "00", sep = "")
+      }
+    }
+  }
+  if (grepl("/", x)) {
+    x <- gsub("/", "", x)
+    x <- unlist(strsplit(x, " "))
+    x <- x[2]
+  }
+  x
+}
+
+```
+
+## Use get_miltime function
+
+```{r}
+start_mil_time <- character(76)
+end_mil_time <- character(76)
+for (i in seq_len(length(sleep$Start.Time))) {
+  start_mil_time[i] <- get_miltime(sleep$Start.Time[i])
+}
+for (i in seq_len(length(sleep$End.Time))) {
+  end_mil_time[i] <- get_miltime(sleep$End.Time[i])
+}
+for(i in 60:76) {
+  if (!is.na(start_mil_time[i])) {
+    start_mil_time[i] <- paste(start_mil_time[i], ":", "00", sep = "")
+  }
+}
+for(i in 60:76) {
+  if (!is.na(end_mil_time[i])) {
+    end_mil_time[i] <- paste(end_mil_time[i], ":", "00", sep = "")
+  }
+}
+
+start_asTime <- as.numeric(chron(times = start_mil_time))
+end_asTime <- as.numeric(chron(times = end_mil_time))
+```
+
+## Clean the times and dates and make final data frame
+
+```{r, warning = FALSE}
+sleep_final <- sleep[, c(1, 21, 15, 27, 29, 30)]
+sleep_final$start_mil_time <- start_mil_time
+sleep_final$end_mil_time <- end_mil_time
+sleep_final$overall_score <- as.numeric(sleep_final$overall_score)
+sleep_final$Number.of.Awakenings <- as.numeric(sleep_final$Number.of.Awakenings)
+sleep_final$restlessness <- as.numeric(sleep_final$restlessness)
+sleep_final$start_asTime <- start_asTime
+sleep_final$end_asTime <- end_asTime
+
+six_oclock <- as.numeric(chron(times = "18:00:00"))
+sleep_final$start_asTime <- ifelse(start_asTime > .88, start_asTime - six_oclock,
+                                   start_asTime + .25)
+# Times greater than 12 AM: add a day (1) then subtract hours of 6 PM (18:00 equals .75 of
+# a day)... i.e. add .25 of a day, or 6 hours, to start_asTime[i] to get time past 6 PM
+
+sleep_final$end_asTime <- end_asTime + .25
+
+# Convert end_asTime to hours past 6 PM for uniformity.
+
+prob_rem <- with(sleep, as.numeric(Minutes.REM.Sleep)/as.numeric(Minutes.Asleep))
+# Above produces warning that NAs are introduced by coercion, because there
+# are NAs in these data.
+sleep_final$prob_rem <- prob_rem
+```
+
+# Exploring the data
+
+# Look for transformations needed
+
+## Y variable
+
+```{r}
+sleep_final_final <- sleep_final[, c(1, 2, 3, 4, 9, 10, 11)]
+sleep_lm <- lm(overall_score ~ . - Date, data = sleep_final_final)
+require(car)
+library(alr3)
+summary(powerTransform(sleep_lm))
+invResPlot(sleep_lm)
+hist(sleep_final$overall_score, col = "dodgerblue2")
+```
+
+## X variables
+
+```{r}
+summary(powerTransform(as.matrix(sleep_final_final[, c(3:7)]) ~ 1))
+```
+
+## Do transforms
+
+```{r}
+sleep_final_final$overall_score <- sleep_final_final$overall_score ^ 3
+```
+
+# Fit the new model, output the summary
+
+```{r}
+sleep_lm_2 <- lm(overall_score ~ . - Date, data = sleep_final_final)
+summary(sleep_lm_2)
+```
+
+# Check the diagnostics for validity/model weaknesses
+
+```{r, warning = FALSE}
+par(mfrow = c(2, 2))
+plot(sleep_lm_2, col = "goldenrod", pch = 18, which = c(1:3))
+n <- dim(sleep_final_final)[1]
+plot(sleep_lm_2, col = "goldenrod", pch = 18, which = 5)
+abline(v = 2 * (5 + 1) / n, lty = 2, col = "forestgreen", lwd = 2)
+abline(h = c(2, -2), lty = 2, col = "dodgerblue", lwd = 2)
+rect(xleft = 2 * (5 + 1) / n, xright = .3, ybottom = c(2, -3.5), ytop = c(3.5, -2),
+     border = NULL, col = "gray60", density = 15)
+```
+
+### Bad Leverage Points and Influential Points
+
+```{r}
+plot(sleep_lm_2, which = 4, col = "goldenrod", lwd = 2)
+hist(cooks.distance(sleep_lm_2), col = "dodgerblue3",
+     main = "Distribution of Cook's Distances:\nWhich points, if removed, would change the regression model most?",
+     xlab = "Cook's Distance",
+     cex.main = .89)
+```
+
